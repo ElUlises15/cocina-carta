@@ -1,0 +1,12 @@
+import {test,after} from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+const dir=mkdtempSync(tmpdir()+'/mabel-');
+const proc=spawn(process.execPath,['server.js'],{env:{...process.env,PORT:'3852',DB_PATH:dir+'/test.sqlite'},stdio:'pipe'});
+await new Promise((resolve,reject)=>{proc.stdout.once('data',resolve);proc.once('error',reject)});
+after(()=>{proc.kill();rmSync(dir,{recursive:true,force:true})});
+const api=async(path,method='GET',body)=>{const r=await fetch('http://localhost:3852/api/'+path,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});return {status:r.status,data:await r.json()}};
+test('full order lifecycle and server-calculated price',async()=>{const {status,data:o}=await api('orders','POST',{table_number:4,items:[{id:'milanesa',quantity:2,price:1}],notes:'Sin sal'});assert.equal(status,201);assert.equal(o.total,25000);assert.equal(o.status,'nuevo');for(const status of ['preparando','listo']){const r=await api('orders/'+o.id,'PATCH',{status});assert.equal(r.data.status,status)}const paid=await api('orders/'+o.id,'PATCH',{paid:true});assert.equal(paid.data.paid,true);const done=await api('orders/'+o.id,'PATCH',{done:true});assert.equal(done.data.done,true);const list=await api('orders');assert.equal(list.data[0].id,o.id)});
+test('reject invalid tables, items and statuses',async()=>{assert.equal((await api('orders','POST',{table_number:0,items:[{id:'milanesa',quantity:1}]})).status,400);assert.equal((await api('orders','POST',{table_number:2,items:[{id:'fake',quantity:1}]})).status,400);assert.equal((await api('orders','POST',{table_number:2,items:[{id:'agua',quantity:-1}]})).status,400);const {data:o}=await api('orders','POST',{table_number:2,items:[{id:'agua',quantity:1}]});assert.equal((await api('orders/'+o.id,'PATCH',{status:'invalid'})).status,400);assert.equal((await api('orders/'+o.id,'PATCH',{paid:'false'})).status,400)});
